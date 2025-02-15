@@ -10,9 +10,9 @@ Parameters:
 
 Globals:
   Function:
-    Tracing: Active  # Enables X-Ray tracing for all Lambda functions
+    Tracing: Active
   Api:
-    TracingEnabled: true  # Enables X-Ray tracing for API Gateway
+    TracingEnabled: true
 
 Resources:
   # Destination Custom EventBridge Bus
@@ -65,7 +65,7 @@ Resources:
           ]
         }
 
-  # Event Rule
+  # Event Rule for Logging
   EventLoggingRule:
     Type: AWS::Events::Rule
     Properties:
@@ -78,7 +78,61 @@ Resources:
         - Arn: !GetAtt DestinationLogGroup.Arn
           Id: "EventLogging"
 
+  # DynamoDB Table
+  EventsTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: ForwardedEvents
+      PrimaryKey:
+        Name: id
+        Type: String
+
+  # Lambda Function
+  ProcessEventFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Runtime: python3.13
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EventsTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EventsTable
+
+  # Event Rule for Forward=True
+  ForwardEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref DestinationCustomBus
+      EventPattern:
+        source:
+          - custom.events
+        detail:
+          type:
+            - forward
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ProcessEventFunction.Arn
+          Id: "ProcessEvent"
+
+  # Lambda Permission for EventBridge
+  EventBridgeInvokeFunction:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ProcessEventFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ForwardEventRule.Arn
+
 Outputs:
   DestinationBusArn:
     Description: "ARN of the destination event bus"
     Value: !GetAtt DestinationCustomBus.Arn
+  EventsTableName:
+    Description: "Name of the DynamoDB table"
+    Value: !Ref EventsTable
+  ProcessEventFunctionArn:
+    Description: "ARN of the Lambda function"
+    Value: !GetAtt ProcessEventFunction.Arn
