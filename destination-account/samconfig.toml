@@ -1,0 +1,13 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "eventbridge-destination-stack"
+region = "us-west-2"
+profile = "eb-destination"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_prefix = "eventbridge-destination-stack"
+parameter_overrides = "SourceAccountId=\"986112483391\""
+image_repositories = []

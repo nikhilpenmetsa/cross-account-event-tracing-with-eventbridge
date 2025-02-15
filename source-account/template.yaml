@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Source account - API Gateway, Lambda, and EventBridge configuration
+
+Parameters:
+  DestinationAccountId:
+    Type: String
+    Description: AWS Account ID of the destination account
+    Default: "YOUR_DESTINATION_ACCOUNT_ID"
+
+Resources:
+  # Custom EventBridge Bus
+  CustomEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: SourceCustomBus
+
+  # EventBridge Rule for local logging
+  EventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref CustomEventBus
+      EventPattern:
+        source:
+          - "custom.events"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt EventLogGroup.Arn
+          Id: "LogGroupTarget"
+
+  # Forward matching events to destination account
+  ForwardingRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref CustomEventBus
+      EventPattern:
+        source:
+          - "custom.events"
+        detail:
+          type:
+            - "forward"
+      State: ENABLED
+      Targets:
+        - Arn: !Sub "arn:aws:events:${AWS::Region}:${DestinationAccountId}:event-bus/DestinationCustomBus"
+          Id: "ForwardToDestination"
+          RoleArn: !GetAtt EventBridgeForwardingRole.Arn
+
+  # IAM Role for EventBridge forwarding
+  EventBridgeForwardingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeForwardingPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: events:PutEvents
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${DestinationAccountId}:event-bus/DestinationCustomBus"
+
+  # EventBridge Rule for logging forwarded events
+  ForwardedEventsLogRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref CustomEventBus
+      EventPattern:
+        source:
+          - "custom.events"
+        detail:
+          type:
+            - "forward"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ForwardedEventsLogGroup.Arn
+          Id: "ForwardedEventsLogTarget"
+
+  # CloudWatch Log Group for forwarded events
+  ForwardedEventsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/events/forwarded-events
+      RetentionInDays: 14
+
+  # CloudWatch Log Group
+  EventLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/events/source-bus-events
+      RetentionInDays: 14
+
+  # Lambda Function
+  PublisherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/publisher/
+      Handler: app.lambda_handler
+      Runtime: python3.13
+      Architectures:
+        - x86_64
+      Timeout: 29
+      Tracing: Active
+      Environment:
+        Variables:
+          EVENT_BUS_NAME: !Ref CustomEventBus
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: 
+                - !GetAtt CustomEventBus.Arn  # Source bus
+                - !Sub "arn:aws:events:${AWS::Region}:${DestinationAccountId}:event-bus/DestinationCustomBus"  # Destination bus
+
+
+        - AWSXrayWriteOnlyAccess
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /publish
+            Method: POST
+            RestApiId: !Ref RestApi
+
+  # API Gateway
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      EndpointConfiguration: REGIONAL
+      TracingEnabled: true
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL for Prod stage"
+    Value: !Sub "https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/publish"
+  SourceBusArn:
+    Description: "ARN of the source event bus"
+    Value: !GetAtt CustomEventBus.Arn

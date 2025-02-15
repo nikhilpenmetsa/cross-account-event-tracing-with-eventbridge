@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Destination account - EventBridge and logging configuration
+
+Parameters:
+  SourceAccountId:
+    Type: String
+    Description: AWS Account ID of the source account
+    Default: "986112483391"
+
+Globals:
+  Function:
+    Tracing: Active  # Enables X-Ray tracing for all Lambda functions
+  Api:
+    TracingEnabled: true  # Enables X-Ray tracing for API Gateway
+
+Resources:
+  # Destination Custom EventBridge Bus
+  DestinationCustomBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: DestinationCustomBus
+
+  # Event Bus Policy to allow source account
+  DestinationBusPolicy:
+    Type: AWS::Events::EventBusPolicy
+    Properties:
+      EventBusName: !Ref DestinationCustomBus
+      StatementId: "AllowSourceAccount"
+      Statement:
+        Effect: "Allow"
+        Principal: 
+          AWS: !Sub "arn:aws:iam::${SourceAccountId}:root"
+        Action: "events:PutEvents"
+        Resource: !GetAtt DestinationCustomBus.Arn
+
+  # CloudWatch Log Group
+  DestinationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/events/destination-bus-events
+      RetentionInDays: 14
+
+  # Log Group Resource Policy
+  LogGroupPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: EventBridgeLogPolicy
+      PolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "EventBridgeToCloudWatchLogs",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              },
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Resource": "${DestinationLogGroup.Arn}"
+            }
+          ]
+        }
+
+  # Event Rule
+  EventLoggingRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref DestinationCustomBus
+      EventPattern:
+        source:
+          - custom.events
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt DestinationLogGroup.Arn
+          Id: "EventLogging"
+
+Outputs:
+  DestinationBusArn:
+    Description: "ARN of the destination event bus"
+    Value: !GetAtt DestinationCustomBus.Arn
