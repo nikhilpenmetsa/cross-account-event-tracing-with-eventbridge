@@ -8,7 +8,7 @@ dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(os.environ['TABLE_NAME'])
 
 def lambda_handler(event, context):
-    print(event)
+    #print(event)
     try:
         item = {
             'id': str(uuid.uuid4()),
